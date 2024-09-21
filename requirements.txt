@@ -4,3 +4,5 @@ streamlit
 flask
 openai
 python-dotenv
+st_pages
+streamlit-pages
