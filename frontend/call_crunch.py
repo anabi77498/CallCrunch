@@ -76,7 +76,7 @@ if st.button("Submit Question"):
         st.session_state["selected_question"] = selected_question
     st.session_state["selected_companies"] = selected_companies
     companies = ", ".join(st.session_state["selected_companies"])
-    st.success(f"Question: {st.session_state["selected_question"]} \n\nFor {companies}")
+    st.success(f"Question: {st.session_state['selected_question']} \n\nFor {companies}")
 
     if st.session_state["selected_question"] and st.session_state["selected_companies"]:
         payload = {

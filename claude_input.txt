@@ -1,0 +1,392 @@
+=== requirements.txt ===
+pandas
+numpy
+streamlit
+flask
+openai
+python-dotenv
+
+
+=== frontend/call_crunch.py ===
+import streamlit as st
+import pandas as pd
+import os
+import requests
+
+# Page configuration
+st.set_page_config(
+    page_title="Call Cruncher",
+    page_icon="📊",
+    layout="wide"
+)
+
+if 'selected_question' not in st.session_state:
+    st.session_state.selected_question = None  
+if 'selected_companies' not in st.session_state:
+    st.session_state.selected_question = None 
+
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, os.pardir)) 
+TRANSCRIPTS_DIR = os.path.join(ROOT_DIR, 'data', 'earning-calls')
+QUESTIONS_FILE = os.path.join(ROOT_DIR, 'data', 'questions.csv')
+
+def get_companies():
+    COMPANIES = {}
+    files = os.listdir(TRANSCRIPTS_DIR)
+    for file in files:
+        if file.endswith('_earning_calls.csv'):
+            ticker = file.split('_')[0]
+            COMPANIES[ticker] = file
+    return COMPANIES
+
+COMPANIES = get_companies()
+
+def load_questions():
+    if os.path.exists(QUESTIONS_FILE):
+        return pd.read_csv(QUESTIONS_FILE)['Question'].tolist()
+    return []
+
+def load_companies():
+    return COMPANIES
+
+def update_questions(question):
+        
+    question = pd.DataFrame({"Question": [question]})
+    existing_df = pd.read_csv(QUESTIONS_FILE) if os.path.exists(QUESTIONS_FILE) else pd.DataFrame(columns=['Question'])
+    
+    updated_df = pd.concat([existing_df, question], ignore_index=True).drop_duplicates(subset=['Question'])
+    
+    updated_df.to_csv(QUESTIONS_FILE, index=False)
+
+st.title('📊 CallCruncher')
+
+st.header("Select Company Tags")
+company_tags = load_companies()
+selected_companies = st.multiselect("Select Companies", company_tags)
+
+# Display selected companies
+st.write(f"Selected Companies: {', '.join(selected_companies) if selected_companies else 'None selected'}")
+
+st.header("Ask a Question")
+existing_questions = load_questions()
+
+# Show existing questions
+st.write("Select from existing questions:")
+selected_question = st.selectbox("Select a question", existing_questions)
+
+# Input a new question
+new_question = st.text_input("Or ask a new question")
+
+if st.button("Submit Question"):
+    if new_question:
+        update_questions(new_question)
+        st.session_state["selected_question"] = new_question
+    else:
+        st.session_state["selected_question"] = selected_question
+    st.session_state["selected_companies"] = selected_companies
+    companies = ", ".join(st.session_state["selected_companies"])
+    st.success(f"Question: {st.session_state['selected_question']} \n\nFor {companies}")
+
+    if st.session_state["selected_question"] and st.session_state["selected_companies"]:
+        payload = {
+            "question": st.session_state["selected_question"],
+            "companies": st.session_state["selected_companies"]
+        }
+
+        response = requests.post("http://127.0.0.1:5000/get_analysis", json=payload)
+
+        if response.status_code == 200:
+            result = response.json()
+            st.markdown("### Response:")
+            st.write(result["analysis"])
+        else:
+            st.write("Error: Could not get a response from the backend")
+    else:
+        st.write("Please select both questions and companies.")
+
+=== frontend/pages/responses.py ===
+import streamlit as st
+import os
+import pandas as pd
+from io import StringIO
+
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, os.pardir, os.pardir)) 
+RESPONSES_FILE = os.path.join(ROOT_DIR, 'data', 'responses.csv')
+
+def load_existing_responses():
+    """Load the list of available transcripts from the directory."""
+    df = pd.read_csv(RESPONSES_FILE)
+    return df
+
+
+st.title('📂 Q&A History of Earnings Calls')
+
+st.dataframe(load_existing_responses())
+
+=== frontend/pages/transcripts.py ===
+import streamlit as st
+import os
+import pandas as pd
+from io import StringIO
+
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, os.pardir, os.pardir)) 
+TRANSCRIPTS_DIR = os.path.join(ROOT_DIR, 'data', 'earning-calls')
+
+def get_companies():
+    COMPANIES = {}
+    files = os.listdir(TRANSCRIPTS_DIR)
+    for file in files:
+        if file.endswith('_earning_calls.csv'):
+            ticker = file.split('_')[0]
+            COMPANIES[ticker] = file
+    return COMPANIES
+
+COMPANIES = get_companies()
+
+def load_existing_transcripts():
+    """Load the list of available transcripts from the directory."""
+    df = pd.DataFrame(list(COMPANIES.items()), 
+                      columns=["Company", "Earnings Call"])
+    return df
+
+def save_transcript(company_name, ticker, date, transcript):
+    """Save the transcript for a company, and append it if the company already exists."""
+    file_name = f"{ticker}_earning_calls.csv"
+    file_path = os.path.join(TRANSCRIPTS_DIR, file_name)
+
+    new_data = {
+        "company": company_name,
+        "date": date,
+        "transcript": transcript
+    }
+
+    
+    if company_name.lower() in map(lambda x: x.lower(), COMPANIES.keys()) and os.path.exists(file_path):
+        df = pd.read_csv(file_path)
+        df = pd.concat([df, pd.DataFrame(new_data)], ignore_index=True)
+        df.to_csv(file_path, index=False)
+    else:
+        df = pd.DataFrame([new_data])
+        df.to_csv(file_path, index=False)
+
+    COMPANIES[company_name] = file_name
+    table_load.empty()
+    return file_name
+
+def get_transcript(path):
+    df = pd.read_csv(path)
+    return df
+
+st.title('📂 Access and Upload Earnings Calls')
+
+table_load, table_empty = st.empty(), True
+if table_empty:
+    table_load.table(load_existing_transcripts())
+
+st.header("Upload or Select Transcript")
+
+company_name = st.text_input("Company Name")
+ticker = st.text_input("Company Ticker")
+date = st.date_input("Call Date")
+uploaded_file = st.file_uploader("Upload Transcript", type="txt")
+
+if uploaded_file and company_name and date:
+    uploaded_file_str = StringIO(uploaded_file.getvalue().decode("utf-8")).read()
+    file_name = save_transcript(company_name, ticker, date, uploaded_file_str)
+    st.success(f"Transcript saved as {file_name} in {TRANSCRIPTS_DIR}")
+
+st.header("Step 2: Access Existing Transcripts")
+transcripts = load_existing_transcripts()
+
+if not transcripts.empty:
+
+    # Option to download a specific transcript
+    selected_transcript = st.selectbox("Select a transcript to view or download", list(COMPANIES.keys()))
+    transcript_path = os.path.join(TRANSCRIPTS_DIR, COMPANIES[selected_transcript])
+    if st.button("Open Transcripts"):
+        st.dataframe(get_transcript(transcript_path))
+        with open(transcript_path, "rb") as f:
+            st.download_button(
+                label="Download",
+                data=f,
+                file_name=COMPANIES[selected_transcript],
+                mime="text/csv"
+            )
+else:
+    st.write("No earnings calls available.")
+
+
+=== backend/server.py ===
+from flask import Flask, request, jsonify
+from dotenv import load_dotenv
+import os
+import requests
+import analyze
+
+load_dotenv()
+
+app = Flask(__name__)
+
+openai_api_key = os.getenv('OPENAI_API_KEY')
+
+@app.route('/')
+def index():
+    return "Backend Live"
+
+@app.route('/get_analysis', methods=['POST'])
+def get_analysis():
+    question = request.json["question"]
+    companies = request.json["companies"]
+    data = {}
+    for ticker in companies:
+        data[ticker] = analyze.get_df(ticker)
+    
+    final_summary = analyze.llm_analyzer(data, question)
+    analyze.store_response(companies, question, final_summary)
+    return jsonify({"analysis": final_summary})
+
+
+if __name__ == '__main__':
+    app.run(debug=True)
+
+
+=== backend/claude-server.py ===
+from flask import Flask, request, jsonify
+from dotenv import load_dotenv
+import os
+import requests
+import analyze
+
+load_dotenv()
+
+app = Flask(__name__)
+
+openai_api_key = os.getenv('OPENAI_API_KEY')
+
+@app.route('/')
+def index():
+    return "Backend Live"
+
+@app.route('/get_analysis', methods=['POST'])
+def get_analysis():
+    question = request.json["question"]
+    companies = request.json["companies"]
+    data = {}
+    for ticker in companies:
+        data[ticker] = analyze.get_df(ticker)
+    
+    final_summary = analyze.llm_analyzer(data, question)
+    analyze.store_response(companies, question, final_summary)
+    return jsonify({"analysis": final_summary})
+
+@app.route('/hello')
+def hello():
+    return "hello"
+
+if __name__ == '__main__':
+    # app.run(debug=True)
+    app.run(debug=True, port=8080)
+
+=== backend/analyze.py ===
+from dotenv import load_dotenv
+import os
+import requests
+import analyze
+import pandas as pd
+from openai import OpenAI
+
+
+load_dotenv()
+openai_api_key = os.getenv('OPENAI_API_KEY')
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+ROOT_DIR = os.path.abspath(os.path.join(BASE_DIR, os.pardir)) 
+TRANSCRIPTS_DIR = os.path.join(ROOT_DIR, 'data', 'earning-calls')
+RESPONSES_FILE = os.path.join(ROOT_DIR, 'data', 'responses.csv')
+
+
+def get_df(ticker):
+    file_path = os.path.join(TRANSCRIPTS_DIR, f'{ticker}_earning_calls.csv')
+    
+    # Check if the CSV file exists
+    if os.path.exists(file_path):
+        df = pd.read_csv(file_path)
+        return df
+    else:
+        return None
+
+
+def llm_analyzer(data, question):
+    client = OpenAI(
+        api_key=openai_api_key
+    )
+    responses = {}
+    
+    # Loop through each company's data
+    for ticker, df in data.items():
+        prompt = f"""
+        I have earnings call data from the company {ticker}.
+        Please analyze the earnings data and give details regarding the following question: {question}. 
+        Explain based on the provided earnings data, do not give "No" or "I can't" for an answer. Make it detailed and lengthy
+        Below is the earnings data:
+        
+        """ + df["transcript"].to_string(index=False)
+        print("FRI HERE")
+        print("Length of Prompt", len(prompt))
+
+        llm_response = client.chat.completions.create(
+            model="gpt-3.5-turbo",
+            messages=[
+                {"role": "user", "content": prompt}
+            ]
+        )
+        
+        # Save the response
+        responses[ticker] = llm_response.choices[0].message.content.strip()
+    
+    
+    # Combine all responses
+    combined_analysis = "\n\n".join(f"{ticker}: {response}" for ticker, response in responses.items())
+    
+    final_prompt = f"""
+    You have been provided with the following analysis of the earning reports from different companies:.
+    Please summarize this analysis and provide a final answer to the question by comparing {question} and contrasting the analysis.
+    Explain based on the provided earnings data/analysis, do not give "No" or "I can't" for an answer. Make it detailed and lengthy, minimum 4 paragraphs
+    Combined Analysis is Below
+    """ + combined_analysis
+
+    print("Length of Final Prompt", len(final_prompt))
+
+    
+    llm_final_comparison = client.chat.completions.create(
+        model="gpt-3.5-turbo",
+        messages=[
+            {"role": "user", "content": final_prompt}
+        ]
+    )
+
+    # Return the final summarized response
+    return llm_final_comparison.choices[0].message.content.strip()
+
+def store_response(tickers, question, final_summary):
+    data = pd.read_csv(RESPONSES_FILE)
+
+    tickers = ", ".join(tickers)
+
+    # Create a new row with the response data
+    new_response = pd.DataFrame({
+        "Tickers": [tickers],
+        "Question": [question],
+        "Response": [final_summary]
+    })
+
+    # Append the new response to the DataFrame
+    data = pd.concat([data, new_response], ignore_index=True)
+
+    # Save the updated DataFrame back to the CSV
+    data.to_csv(RESPONSES_FILE, index=False)
